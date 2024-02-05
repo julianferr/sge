@@ -106,6 +106,8 @@ if __name__ == '__main__':
 
 player_df = player_df[player_df['TRACK_ID'] != 55]
 
+player_df = player_df.sort_values(by=['FRAME'])
+
 tmp_path = 'player_tmp.csv'
 
 if os.path.exists(tmp_path):
@@ -130,7 +132,10 @@ else:
 
     teams = player_df['POSSESSION_GROUP'].dropna().unique().tolist()
 
+    player_df['play_index'] = 0
+
     prev_possession = 'away team'
+    i = 0
 
     for t in frames:
         possession_t = camera_df.loc[camera_df['FRAME'] == t, 'POSSESSION_GROUP'].values[0]
@@ -141,12 +146,15 @@ else:
 
         if possession_t != prev_possession:
             prev_possession = possession_t
+            i += 1
+
+        player_df.loc[player_df['FRAME'] == t, 'play_index'] = i
 
     player_df.to_csv(tmp_path, index=False)
     # TODO: Only opponent
 
 
-home_poss_df = player_df[player_df['POSSESSION_GROUP'] == 'home team']
+home_poss_df = player_df.copy(deep=True)
 
 pressure_vals = {
     'avg_team_velo': home_poss_df[home_poss_df['TRACK_ID'].isin(HOME_TEAM)].groupby('FRAME')['velo'].mean(),
@@ -164,12 +172,17 @@ pressure_df = pd.DataFrame(index=pressure_vals['avg_team_velo'].index)
 unique_elems_opp = set(pressure_vals['avg_opp_velo'].index.to_list()) -\
                    set(pressure_vals['avg_team_velo'].index.to_list())
 
+velo_max = max(pressure_vals['avg_team_velo'].max(), pressure_vals['avg_opp_velo'].max())
 
 for key, val in pressure_vals.items():
     if key != 'avg_team_velo':
         val = val.drop(index=list(unique_elems_opp))
 
-    x_max = val.max()
+    if key in ['avg_team_velo', 'avg_opp_velo']:
+        x_max = velo_max
+    else:
+        x_max = val.max()
+
     pressure_df[key] = (val / x_max).values
 
 pressure_df = pressure_df.dropna()
@@ -184,6 +197,17 @@ pressure_df['pressure'] = pressure_df['pressure'] / p_max
 pressure_df['FRAME'] = pressure_df.index
 pressure_df.reset_index(drop=True, inplace=True)
 
+del pressure_df['sum_opp_dist']
+del pressure_df['avg_min_dist']
+
+pressure_df = pd.merge(pressure_df, player_df[['FRAME', 'POSSESSION_GROUP', 'play_index']], on='FRAME')\
+    .drop_duplicates(subset='FRAME')
+
+pressure_per_play_df = pressure_df[['avg_team_velo', 'avg_opp_velo', 'pressure', 'play_index']].groupby('play_index')\
+    .mean()
+play_possession_map = pressure_df[['play_index', 'POSSESSION_GROUP']].drop_duplicates()
+
+pressure_df = pd.merge(pressure_per_play_df, play_possession_map, on='play_index').drop_duplicates(subset='play_index')
 
 if __name__ == '__main__':
     output_path = 'pressure.csv'
